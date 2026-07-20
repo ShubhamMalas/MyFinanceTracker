@@ -9,15 +9,16 @@ A simple local finance tracker built as a Progressive Web App (PWA).
 - supports categories for expenses and income
 - shows recent transactions, summaries, and charts
 - supports currency selection, export/import, and clear-all
-- includes a PWA manifest and service worker for installable experience
+- includes a PWA manifest and service worker for an installable experience
+- applies basic client-side hardening for safer local data handling and rendering
 
 ## Project files
 
-- `index.html` — main UI and structure
-- `app.js` — app logic, data management, PWA behavior
+- `index.html` — main UI, layout, and security policy headers
+- `app.js` — app logic, data management, rendering, import/export, and safety checks
 - `manifest.json` — PWA metadata and app icons
-- `sw.js` — service worker cache support
-- `icons/` — app icons for installable PWA
+- `sw.js` — service worker cache and offline support
+- `icons/` — app icons for the installable PWA
 
 ## Run locally
 
