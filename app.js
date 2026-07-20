@@ -50,7 +50,24 @@ function loadState() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      state = Object.assign(state, parsed);
+
+      if (Array.isArray(parsed.transactions)) {
+        parsed.transactions = parsed.transactions.map(tx => ({
+          id: String(tx.id || uid()).replace(/[^\w-]/g, "_"),
+          type: tx.type === "income" ? "income" : "expense",
+          amount: Number(tx.amount) || 0,
+          categoryId: String(tx.categoryId || ""),
+          note: String(tx.note || ""),
+          date: String(tx.date || todayISO()),
+          createdAt: Number(tx.createdAt) || Date.now()
+        }));
+      }
+
+      const cats = parsed.categories || {};
+      const expenseCats = Array.isArray(cats.expense) ? cats.expense.map(sanitizeCategory) : JSON.parse(JSON.stringify(DEFAULT_CATEGORIES.expense));
+      const incomeCats = Array.isArray(cats.income) ? cats.income.map(sanitizeCategory) : JSON.parse(JSON.stringify(DEFAULT_CATEGORIES.income));
+
+      state = Object.assign(state, parsed, { categories: { expense: expenseCats, income: incomeCats } });
       if (!state.categories) state.categories = JSON.parse(JSON.stringify(DEFAULT_CATEGORIES));
     } else {
       seedSampleData();
@@ -95,6 +112,57 @@ function allCategoriesFlat() {
   return [...state.categories.expense, ...state.categories.income];
 }
 function todayISO() { return new Date().toISOString().slice(0, 10); }
+
+// Escape text content for HTML insertion
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = String(str == null ? "" : str);
+  return div.innerHTML;
+}
+
+// Escape for attribute values (data-* / attribute contexts)
+function escapeAttr(s) {
+  if (s == null) return "";
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+// sanitize a category object loaded from json/localStorage
+function sanitizeCategory(c) {
+  return {
+    id: String(c && c.id ? c.id : uid()).replace(/[^\w-]/g, "_"),
+    name: String(c && c.name ? c.name : "Other"),
+    icon: String(c && c.icon ? c.icon : "🔘"),
+    color: /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/.test(c && c.color ? c.color : "") ? c.color : "#9AA0AC"
+  };
+}
+
+function sanitizeText(value, fallback = "", maxLength = 160) {
+  if (value === null || value === undefined) return fallback;
+  const text = String(value).replace(/[\u0000-\u001F\u007F]/g, " ").trim();
+  const safe = text.replace(/\s+/g, " ").slice(0, maxLength);
+  return safe || fallback;
+}
+
+function sanitizeId(value, fallback = "") {
+  const base = sanitizeText(value, fallback).toLowerCase().replace(/[^a-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
+  return base || fallback;
+}
+
+function sanitizeColor(value, fallback = "#9AA0AC") {
+  const safe = sanitizeText(value, fallback);
+  return /^#[0-9a-f]{3,8}$/i.test(safe) ? safe : fallback;
+}
+
+function normalizeDate(value) {
+  if (typeof value !== "string" || !value.trim()) return todayISO();
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? todayISO() : d.toISOString().slice(0, 10);
+}
 
 function toast(msg) {
   const t = document.getElementById("toast");
@@ -152,20 +220,26 @@ function renderTxList(container, list) {
   container.innerHTML = list.map(t => {
     const cat = getCategory(t.categoryId, t.type);
     const dateLabel = formatDateLabel(t.date);
+    const safeId = sanitizeId(t.id, "tx");
     return `
-      <div class="tx-item" onclick="openEditTx('${t.id}')">
-        <div class="tx-icon" style="background:${cat.color}26;color:${cat.color}">${cat.icon}</div>
+      <div class="tx-item" data-tx-id="${safeId}">
+        <div class="tx-icon" style="background:${sanitizeColor(cat.color)}26;color:${sanitizeColor(cat.color)}">${escapeHtml(sanitizeText(cat.icon, "❓", 8))}</div>
         <div class="tx-mid">
-          <p class="t">${escapeHtml(t.note || cat.name)}</p>
-          <p class="s">${cat.name} · ${dateLabel}</p>
+          <p class="t">${escapeHtml(sanitizeText(t.note || cat.name, "", 60))}</p>
+          <p class="s">${escapeHtml(sanitizeText(cat.name, "Uncategorized", 40))} · ${escapeHtml(sanitizeText(dateLabel, "", 20))}</p>
         </div>
         <div class="tx-amt ${t.type === "income" ? "in" : "out"}">${t.type === "income" ? "+" : "-"}${fmt(t.amount).replace("-", "")}</div>
       </div>`;
   }).join("");
+
+  container.querySelectorAll('.tx-item').forEach((item) => {
+    item.addEventListener('click', () => openEditTx(item.getAttribute('data-tx-id')));
+  });
 }
 
 function formatDateLabel(dateStr) {
   const d = new Date(dateStr + "T00:00:00");
+  if (isNaN(d.getTime())) return escapeHtml(dateStr);
   const today = new Date(); today.setHours(0,0,0,0);
   const diffDays = Math.round((today - d) / 86400000);
   if (diffDays === 0) return "Today";
@@ -173,18 +247,17 @@ function formatDateLabel(dateStr) {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function escapeHtml(str) {
-  const div = document.createElement("div");
-  div.textContent = str;
-  return div.innerHTML;
-}
-
 /* ---------------- All Transactions + Filter ---------------- */
 function renderTxFilterChips() {
   const chips = [{ id: "all", name: "All" }, { id: "income", name: "Income" }, { id: "expense", name: "Expense" }];
-  document.getElementById("txFilterChips").innerHTML = chips.map(c =>
-    `<div class="chip ${ui.txFilter === c.id ? "active" : ""}" onclick="setTxFilter('${c.id}')">${c.name}</div>`
+  const container = document.getElementById("txFilterChips");
+  container.innerHTML = chips.map(c =>
+    `<div class="chip ${ui.txFilter === c.id ? "active" : ""}" data-filter="${sanitizeId(c.id, "all")}">${escapeHtml(sanitizeText(c.name, c.id, 20))}</div>`
   ).join("");
+
+  container.querySelectorAll('.chip').forEach((chip) => {
+    chip.addEventListener('click', () => setTxFilter(chip.getAttribute('data-filter')));
+  });
 }
 function setTxFilter(f) { ui.txFilter = f; renderAllTransactions(); }
 function openFilterModal() { /* reserved for future use */ toast("Use the filter chips below"); }
@@ -235,13 +308,21 @@ function setTxType(type, presetCategoryId) {
 }
 
 function renderAddCatGrid() {
-  const cats = state.categories[ui.txType];
-  document.getElementById("addCatGrid").innerHTML = cats.map(c => `
-    <div class="cat-cell ${c.id === ui.selectedCategoryId ? "active" : ""}" onclick="selectAddCategory('${c.id}')">
-      <div class="ic" style="background:${c.color}26">${c.icon}</div>
-      <span>${c.name}</span>
-    </div>
-  `).join("");
+  const cats = state.categories[ui.txType] || [];
+  const container = document.getElementById("addCatGrid");
+  container.innerHTML = cats.map(c => {
+    const safeId = sanitizeId(c.id, "cat");
+    return `
+      <div class="cat-cell ${c.id === ui.selectedCategoryId ? "active" : ""}" data-cat-id="${safeId}">
+        <div class="ic" style="background:${sanitizeColor(c.color)}26">${escapeHtml(sanitizeText(c.icon, "🔘", 8))}</div>
+        <span>${escapeHtml(sanitizeText(c.name, "Category", 24))}</span>
+      </div>
+    `;
+  }).join("");
+
+  container.querySelectorAll('.cat-cell').forEach((cell) => {
+    cell.addEventListener('click', () => selectAddCategory(cell.getAttribute('data-cat-id')));
+  });
 }
 function selectAddCategory(id) {
   ui.selectedCategoryId = id;
@@ -255,20 +336,31 @@ function saveTransaction() {
     toast("Enter a valid amount");
     return;
   }
-  const note = document.getElementById("noteInput").value.trim();
-  const date = document.getElementById("dateInput").value || todayISO();
+  const note = sanitizeText(document.getElementById("noteInput").value, "", 120);
+  const date = normalizeDate(document.getElementById("dateInput").value || todayISO());
+  const categoryId = state.categories[ui.txType]?.some(c => c.id === ui.selectedCategoryId)
+    ? ui.selectedCategoryId
+    : state.categories[ui.txType]?.[0]?.id || null;
 
   if (ui.editingTxId) {
     const t = state.transactions.find(x => x.id === ui.editingTxId);
     if (t) {
-      t.amount = amount; t.type = ui.txType; t.categoryId = ui.selectedCategoryId;
-      t.note = note; t.date = date;
+      t.amount = Number(amount.toFixed(2));
+      t.type = ui.txType;
+      t.categoryId = categoryId;
+      t.note = note;
+      t.date = date;
     }
     toast("Transaction updated");
   } else {
     state.transactions.push({
-      id: uid(), type: ui.txType, amount, categoryId: ui.selectedCategoryId,
-      note, date, createdAt: Date.now()
+      id: uid(),
+      type: ui.txType,
+      amount: Number(amount.toFixed(2)),
+      categoryId,
+      note,
+      date,
+      createdAt: Date.now()
     });
     toast("Transaction added");
   }
@@ -323,11 +415,11 @@ function renderStats() {
 
   const expenses = list.filter(t => t.type === "expense");
   const byCat = {};
-  expenses.forEach(t => { byCat[t.categoryId] = (byCat[t.categoryId] || 0) + t.amount; });
+  expenses.forEach(t => { byCat[t.categoryId] = (byCat[t.categoryId] || 0) + Number(t.amount || 0); });
   const catEntries = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
 
   const ctx = document.getElementById("donutChart").getContext("2d");
-  const labels = catEntries.map(([id]) => getCategory(id, "expense").name);
+  const labels = catEntries.map(([id]) => escapeHtml(getCategory(id, "expense").name));
   const data = catEntries.map(([, v]) => v);
   const colors = catEntries.map(([id]) => getCategory(id, "expense").color);
 
@@ -350,10 +442,10 @@ function renderStats() {
     return `
       <div class="cat-bar-row">
         <div class="top">
-          <span class="name">${cat.icon} ${cat.name}</span>
+          <span class="name">${escapeHtml(cat.icon)} ${escapeHtml(cat.name)}</span>
           <span class="amt">${fmt(val)} · ${pct}%</span>
         </div>
-        <div class="bar-track"><div class="bar-fill" style="width:${(val/maxVal*100).toFixed(0)}%; background:${cat.color}"></div></div>
+        <div class="bar-track"><div class="bar-fill" style="width:${(val/maxVal*100).toFixed(0)}%; background:${escapeAttr(cat.color)}"></div></div>
       </div>`;
   }).join("");
 }
@@ -373,20 +465,24 @@ function baseDonutOptions(empty) {
 function renderCategoryManage() {
   document.getElementById("expCatList").innerHTML = state.categories.expense.map(c => categoryRow(c, "expense")).join("");
   document.getElementById("incCatList").innerHTML = state.categories.income.map(c => categoryRow(c, "income")).join("");
+
+  document.querySelectorAll(".manage-row .del").forEach(el => {
+    el.onclick = () => confirmDeleteCategory(el.getAttribute("data-id"), el.getAttribute("data-type"));
+  });
 }
 function categoryRow(c, type) {
   return `
     <div class="manage-row">
-      <div class="ic" style="background:${c.color}26;color:${c.color}">${c.icon}</div>
+      <div class="ic" style="background:${escapeAttr(c.color)}26;color:${escapeAttr(c.color)}">${escapeHtml(c.icon)}</div>
       <div class="nm">${escapeHtml(c.name)}</div>
-      <div class="del" onclick="confirmDeleteCategory('${c.id}','${type}')">🗑️</div>
+      <div class="del" data-id="${escapeAttr(c.id)}" data-type="${escapeAttr(type)}">🗑️</div>
     </div>`;
 }
 function promptAddCategory(type) {
   const name = prompt("Category name:");
   if (!name || !name.trim()) return;
   const icon = prompt("Emoji icon (e.g. 🛒):", "🔘") || "🔘";
-  const palette = ["#7C8CFF","#FF6B6B","#33D69F","#F5C542","#5CC8FF","#FF8FD4","#FFA463","#4FD1C5"];
+  const palette = ["#7C8CFF", "#FF6B6B", "#33D69F", "#F5C542", "#5CC8FF", "#FF8FD4", "#FFA463", "#4FD1C5"];
   const color = palette[Math.floor(Math.random() * palette.length)];
   const id = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_") + "_" + uid().slice(0, 4);
   state.categories[type].push({ id, name: name.trim(), icon, color });
@@ -401,9 +497,12 @@ function confirmDeleteCategory(id, type) {
     inUse ? "Transactions using this category will be marked Uncategorized." : "This action can't be undone.",
     () => {
       state.categories[type] = state.categories[type].filter(c => c.id !== id);
+      state.transactions = state.transactions.map(t => t.categoryId === id ? { ...t, categoryId: null } : t);
       saveState();
       closeModal();
       renderCategoryManage();
+      renderHome();
+      renderAllTransactions();
       toast("Category deleted");
     }
   );
@@ -446,8 +545,27 @@ function importData(event) {
   reader.onload = () => {
     try {
       const parsed = JSON.parse(reader.result);
-      if (!parsed.transactions || !parsed.categories) throw new Error("Invalid file");
-      state = parsed;
+      if (!Array.isArray(parsed.transactions) || typeof parsed.categories !== "object") throw new Error("Invalid file");
+
+      const txs = parsed.transactions.map(tx => {
+        const amount = Number(tx.amount);
+        return {
+          id: String(tx.id || uid()).replace(/[^\w-]/g, "_"),
+          type: tx.type === "income" ? "income" : "expense",
+          amount: isFinite(amount) ? amount : 0,
+          categoryId: String(tx.categoryId || ""),
+          note: String(tx.note || ""),
+          date: String(tx.date || todayISO()),
+          createdAt: Number(tx.createdAt) || Date.now()
+        };
+      });
+
+      const cats = {
+        expense: Array.isArray(parsed.categories.expense) ? parsed.categories.expense.map(sanitizeCategory) : JSON.parse(JSON.stringify(DEFAULT_CATEGORIES.expense)),
+        income: Array.isArray(parsed.categories.income) ? parsed.categories.income.map(sanitizeCategory) : JSON.parse(JSON.stringify(DEFAULT_CATEGORIES.income))
+      };
+
+      state = { transactions: txs, categories: cats, currency: CURRENCIES[parsed.currency] ? parsed.currency : "USD" };
       saveState();
       toast("Data imported");
       updateCurrencyLabel();
@@ -493,7 +611,7 @@ function init() {
   renderHome();
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js").catch(() => {});
+    navigator.serviceWorker.register("sw.js").catch((err) => { console.warn("SW registration failed:", err); });
   }
 }
 document.addEventListener("DOMContentLoaded", init);
