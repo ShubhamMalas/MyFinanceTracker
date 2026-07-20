@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Wallet — Finance Tracker</title>
 <meta name="theme-color" content="#0F1115">
 <link rel="manifest" href="manifest.json">
@@ -37,6 +37,7 @@ body{
   user-select:none;
 }
 #app{
+  width:100%;
   max-width:480px;
   margin:0 auto;
   min-height:100vh;
@@ -44,6 +45,18 @@ body{
   padding-bottom:calc(84px + var(--safe-bottom));
   display:flex;
   flex-direction:column;
+}
+
+@media (max-width:480px){
+  body{font-size:16px;}
+  #app{max-width:100%; width:100%;}
+  .topbar{padding:16px 16px 8px;}
+  .tx-list,.chips{padding:0 16px;}
+  .balance-card{margin:12px 16px 18px;}
+  .section-head{padding:4px 16px 10px;}
+  .sheet-header{padding:16px 12px 10px;}
+  .field-group{padding:0 16px;}
+  .amount-input-wrap{padding:6px 16px 22px;}
 }
 .screen{display:none; padding-top:var(--safe-top);}
 .screen.active{display:block; animation:fadein .18s ease;}
