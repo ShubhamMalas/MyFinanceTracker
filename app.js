@@ -3,7 +3,7 @@
    Data persisted to localStorage (JSON) — no server needed.
    ========================================================= */
 
-const STORAGE_KEY = "wallet_data_v1";
+//const STORAGE_KEY = "wallet_data_v1";
 
 const DEFAULT_CATEGORIES = {
   expense: [
@@ -32,7 +32,7 @@ const CURRENCIES = {
 let state = {
   transactions: [], // {id, type, amount, categoryId, note, date, createdAt}
   categories: JSON.parse(JSON.stringify(DEFAULT_CATEGORIES)),
-  currency: "USD",
+  currency: "INR",
 };
 
 let ui = {
@@ -41,57 +41,34 @@ let ui = {
   selectedCategoryId: null,
   editingTxId: null,
   txFilter: "all",
+  txSearch: "",
+  txCategoryFilter: "all",
   statPeriod: "month",
 };
 
 /* ---------------- Storage ---------------- */
-function loadState() {
+
+async function loadState() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
+    await DB.init();
+    state.transactions = await DB.getTransactions();
+    state.categories = await DB.getCategories();
+    state.currency = await DB.getSetting("currency") || "INR";
 
-      if (Array.isArray(parsed.transactions)) {
-        parsed.transactions = parsed.transactions.map(tx => ({
-          id: String(tx.id || uid()).replace(/[^\w-]/g, "_"),
-          type: tx.type === "income" ? "income" : "expense",
-          amount: Number(tx.amount) || 0,
-          categoryId: String(tx.categoryId || ""),
-          note: String(tx.note || ""),
-          date: String(tx.date || todayISO()),
-          createdAt: Number(tx.createdAt) || Date.now()
-        }));
-      }
-
-      const cats = parsed.categories || {};
-      const expenseCats = Array.isArray(cats.expense) ? cats.expense.map(sanitizeCategory) : JSON.parse(JSON.stringify(DEFAULT_CATEGORIES.expense));
-      const incomeCats = Array.isArray(cats.income) ? cats.income.map(sanitizeCategory) : JSON.parse(JSON.stringify(DEFAULT_CATEGORIES.income));
-
-      state = Object.assign(state, parsed, { categories: { expense: expenseCats, income: incomeCats } });
-      if (!state.categories) state.categories = JSON.parse(JSON.stringify(DEFAULT_CATEGORIES));
-    } else {
-      seedSampleData();
+    if (state.categories.expense.length === 0) {
+      state.categories = JSON.parse(JSON.stringify(DEFAULT_CATEGORIES));
+      await DB.saveCategories(state.categories);
     }
   } catch (e) {
-    console.error("Failed to load state", e);
+
+    console.error("Failed to load state from SQLite", e);
   }
 }
 
-function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-}
-
-function seedSampleData() {
-  const today = new Date();
-  const iso = (d) => d.toISOString().slice(0, 10);
-  state.transactions = [
-    { id: uid(), type: "income", amount: 2500, categoryId: "salary", note: "Monthly salary", date: iso(today), createdAt: Date.now() - 1000 },
-    { id: uid(), type: "expense", amount: 42.5, categoryId: "food", note: "Groceries", date: iso(today), createdAt: Date.now() - 900 },
-    { id: uid(), type: "expense", amount: 15, categoryId: "transport", note: "Uber ride", date: iso(new Date(today - 86400000)), createdAt: Date.now() - 800 },
-    { id: uid(), type: "expense", amount: 89.99, categoryId: "shopping", note: "New shoes", date: iso(new Date(today - 2 * 86400000)), createdAt: Date.now() - 700 },
-    { id: uid(), type: "expense", amount: 60, categoryId: "bills", note: "Electricity bill", date: iso(new Date(today - 3 * 86400000)), createdAt: Date.now() - 600 },
-  ];
-  saveState();
+async function persistCategories() {
+  // Transactions are saved via DB.addTransaction/deleteTransaction
+  // Categories are saved via DB.saveCategories
+  await DB.saveCategories(state.categories);
 }
 
 function uid() {
@@ -129,16 +106,6 @@ function escapeAttr(s) {
     .replace(/'/g, "&#39;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
-}
-
-// sanitize a category object loaded from json/localStorage
-function sanitizeCategory(c) {
-  return {
-    id: String(c && c.id ? c.id : uid()).replace(/[^\w-]/g, "_"),
-    name: String(c && c.name ? c.name : "Other"),
-    icon: String(c && c.icon ? c.icon : "🔘"),
-    color: /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/.test(c && c.color ? c.color : "") ? c.color : "#9AA0AC"
-  };
 }
 
 function sanitizeText(value, fallback = "", maxLength = 160) {
@@ -217,20 +184,31 @@ function renderTxList(container, list) {
     container.innerHTML = `<div class="empty-state"><div class="e-ic">💸</div><p><strong>No transactions yet</strong></p><p>Tap the + button to add your first one.</p></div>`;
     return;
   }
-  container.innerHTML = list.map(t => {
-    const cat = getCategory(t.categoryId, t.type);
+
+  let html = "";
+  let lastDate = null;
+
+  list.forEach(t => {
     const dateLabel = formatDateLabel(t.date);
+    if (dateLabel !== lastDate) {
+      html += `<div class="date-heading">${dateLabel}</div>`;
+      lastDate = dateLabel;
+    }
+
+    const cat = getCategory(t.categoryId, t.type);
     const safeId = sanitizeId(t.id, "tx");
-    return `
+    html += `
       <div class="tx-item" data-tx-id="${safeId}">
         <div class="tx-icon" style="background:${sanitizeColor(cat.color)}26;color:${sanitizeColor(cat.color)}">${escapeHtml(sanitizeText(cat.icon, "❓", 8))}</div>
         <div class="tx-mid">
           <p class="t">${escapeHtml(sanitizeText(t.note || cat.name, "", 60))}</p>
-          <p class="s">${escapeHtml(sanitizeText(cat.name, "Uncategorized", 40))} · ${escapeHtml(sanitizeText(dateLabel, "", 20))}</p>
+          <p class="s">${escapeHtml(sanitizeText(cat.name, "Uncategorized", 40))}</p>
         </div>
         <div class="tx-amt ${t.type === "income" ? "in" : "out"}">${t.type === "income" ? "+" : "-"}${fmt(t.amount).replace("-", "")}</div>
       </div>`;
-  }).join("");
+  });
+
+  container.innerHTML = html;
 
   container.querySelectorAll('.tx-item').forEach((item) => {
     item.addEventListener('click', () => openEditTx(item.getAttribute('data-tx-id')));
@@ -259,13 +237,57 @@ function renderTxFilterChips() {
     chip.addEventListener('click', () => setTxFilter(chip.getAttribute('data-filter')));
   });
 }
+
+function renderTxFilters() {
+  const catSelect = document.getElementById("txCatFilter");
+  if (!catSelect) return;
+
+  const allCats = allCategoriesFlat();
+  let html = `<option value="all" ${ui.txCategoryFilter === "all" ? "selected" : ""}>All Categories</option>`;
+
+  allCats.forEach(c => {
+    html += `<option value="${escapeAttr(c.id)}" ${ui.txCategoryFilter === c.id ? "selected" : ""}>${escapeHtml(c.name)}</option>`;
+  });
+
+  catSelect.innerHTML = html;
+}
+
 function setTxFilter(f) { ui.txFilter = f; renderAllTransactions(); }
 function openFilterModal() { /* reserved for future use */ toast("Use the filter chips below"); }
 
 function renderAllTransactions() {
   renderTxFilterChips();
-  let list = [...state.transactions].sort((a, b) => b.createdAt - a.createdAt);
-  if (ui.txFilter !== "all") list = list.filter(t => t.type === ui.txFilter);
+  renderTxFilters();
+
+  let list = [...state.transactions];
+
+  // 1. Sorting: Latest date first, then latest createdAt
+  list.sort((a, b) => {
+    if (a.date !== b.date) return b.date.localeCompare(a.date);
+    return b.createdAt - a.createdAt;
+  });
+
+  // 2. Additive Filtering
+  // Type filter
+  if (ui.txFilter !== "all") {
+    list = list.filter(t => t.type === ui.txFilter);
+  }
+
+  // Search filter (note or category name)
+  if (ui.txSearch) {
+    const query = ui.txSearch.toLowerCase();
+    list = list.filter(t => {
+      const cat = getCategory(t.categoryId, t.type);
+      return (t.note && t.note.toLowerCase().includes(query)) ||
+             (cat && cat.name.toLowerCase().includes(query));
+    });
+  }
+
+  // Category filter
+  if (ui.txCategoryFilter !== "all") {
+    list = list.filter(t => t.categoryId === ui.txCategoryFilter);
+  }
+
   renderTxList(document.getElementById("allTxList"), list);
 }
 
@@ -329,7 +351,7 @@ function selectAddCategory(id) {
   renderAddCatGrid();
 }
 
-function saveTransaction() {
+async function saveTransaction() {
   const amountRaw = document.getElementById("amountInput").value;
   const amount = parseFloat(amountRaw);
   if (!amountRaw || isNaN(amount) || amount <= 0) {
@@ -342,37 +364,39 @@ function saveTransaction() {
     ? ui.selectedCategoryId
     : state.categories[ui.txType]?.[0]?.id || null;
 
+  const txData = {
+    amount: Number(amount.toFixed(2)),
+    type: ui.txType,
+    categoryId,
+    note,
+    date
+  };
+
   if (ui.editingTxId) {
+    await DB.updateTransaction(ui.editingTxId, txData);
     const t = state.transactions.find(x => x.id === ui.editingTxId);
     if (t) {
-      t.amount = Number(amount.toFixed(2));
-      t.type = ui.txType;
-      t.categoryId = categoryId;
-      t.note = note;
-      t.date = date;
+      Object.assign(t, txData);
     }
     toast("Transaction updated");
   } else {
-    state.transactions.push({
+    const newTx = {
       id: uid(),
-      type: ui.txType,
-      amount: Number(amount.toFixed(2)),
-      categoryId,
-      note,
-      date,
+      ...txData,
       createdAt: Date.now()
-    });
+    };
+    await DB.addTransaction(newTx);
+    state.transactions.push(newTx);
     toast("Transaction added");
   }
-  saveState();
   goTo(ui.editingTxId ? "transactions" : "home");
   ui.editingTxId = null;
 }
 
 function confirmDeleteTx() {
-  showModal("Delete transaction?", "This action can't be undone.", () => {
+  showModal("Delete transaction?", "This action can't be undone.", async () => {
+    await DB.deleteTransaction(ui.editingTxId);
     state.transactions = state.transactions.filter(t => t.id !== ui.editingTxId);
-    saveState();
     closeModal();
     toast("Transaction deleted");
     ui.editingTxId = null;
@@ -478,7 +502,7 @@ function categoryRow(c, type) {
       <div class="del" data-id="${escapeAttr(c.id)}" data-type="${escapeAttr(type)}">🗑️</div>
     </div>`;
 }
-function promptAddCategory(type) {
+async function promptAddCategory(type) {
   const name = prompt("Category name:");
   if (!name || !name.trim()) return;
   const icon = prompt("Emoji icon (e.g. 🛒):", "🔘") || "🔘";
@@ -486,7 +510,7 @@ function promptAddCategory(type) {
   const color = palette[Math.floor(Math.random() * palette.length)];
   const id = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_") + "_" + uid().slice(0, 4);
   state.categories[type].push({ id, name: name.trim(), icon, color });
-  saveState();
+  await persistCategories();
   renderCategoryManage();
   toast("Category added");
 }
@@ -495,10 +519,10 @@ function confirmDeleteCategory(id, type) {
   showModal(
     "Delete category?",
     inUse ? "Transactions using this category will be marked Uncategorized." : "This action can't be undone.",
-    () => {
+    async () => {
       state.categories[type] = state.categories[type].filter(c => c.id !== id);
       state.transactions = state.transactions.map(t => t.categoryId === id ? { ...t, categoryId: null } : t);
-      saveState();
+      await persistCategories();
       closeModal();
       renderCategoryManage();
       renderHome();
@@ -509,13 +533,13 @@ function confirmDeleteCategory(id, type) {
 }
 
 /* ---------------- Settings: currency / export / import / clear ---------------- */
-function changeCurrency() {
+async function changeCurrency() {
   const codes = Object.keys(CURRENCIES);
   const current = codes.indexOf(state.currency);
   const choice = prompt("Currency code (" + codes.join(", ") + "):", state.currency);
   if (choice && CURRENCIES[choice.toUpperCase()]) {
     state.currency = choice.toUpperCase();
-    saveState();
+    await DB.saveSetting("currency", state.currency);
     updateCurrencyLabel();
     renderHome();
     toast("Currency updated");
@@ -523,66 +547,60 @@ function changeCurrency() {
 }
 function updateCurrencyLabel() {
   document.getElementById("currencyLabel").textContent = `${state.currency} (${currencySymbol()})`;
+  const cur = document.getElementById("curSymbol");
+  if (cur) cur.textContent = currencySymbol();
 }
 
-function exportData() {
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `wallet-backup-${todayISO()}.json`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-  toast("Exported");
+async function downloadDatabase() {
+  try {
+    const data = await DB.exportFile();
+    const blob = new Blob([data], { type: "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `wallet-${todayISO()}.db`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast("wallet.db downloaded");
+  } catch (e) {
+    console.error(e);
+    toast("Download failed");
+  }
 }
 
-function importData(event) {
+function uploadDatabase() {
+  document.getElementById("uploadDbFile").click();
+}
+
+async function restoreDatabase(event) {
   const file = event.target.files[0];
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => {
+  showModal("Restore database?", "This will replace all current data with the contents of the .db file.", async () => {
     try {
-      const parsed = JSON.parse(reader.result);
-      if (!Array.isArray(parsed.transactions) || typeof parsed.categories !== "object") throw new Error("Invalid file");
-
-      const txs = parsed.transactions.map(tx => {
-        const amount = Number(tx.amount);
-        return {
-          id: String(tx.id || uid()).replace(/[^\w-]/g, "_"),
-          type: tx.type === "income" ? "income" : "expense",
-          amount: isFinite(amount) ? amount : 0,
-          categoryId: String(tx.categoryId || ""),
-          note: String(tx.note || ""),
-          date: String(tx.date || todayISO()),
-          createdAt: Number(tx.createdAt) || Date.now()
-        };
-      });
-
-      const cats = {
-        expense: Array.isArray(parsed.categories.expense) ? parsed.categories.expense.map(sanitizeCategory) : JSON.parse(JSON.stringify(DEFAULT_CATEGORIES.expense)),
-        income: Array.isArray(parsed.categories.income) ? parsed.categories.income.map(sanitizeCategory) : JSON.parse(JSON.stringify(DEFAULT_CATEGORIES.income))
-      };
-
-      state = { transactions: txs, categories: cats, currency: CURRENCIES[parsed.currency] ? parsed.currency : "USD" };
-      saveState();
-      toast("Data imported");
+      const buf = await file.arrayBuffer();
+      await DB.importFile(buf);
+      state.transactions = await DB.getTransactions();
+      state.categories = await DB.getCategories();
+      closeModal();
       updateCurrencyLabel();
-      goTo("home");
+      renderHome();
+      toast("Database restored");
     } catch (e) {
-      toast("Invalid backup file");
+      closeModal();
+      toast("Invalid .db file");
     }
     event.target.value = "";
-  };
-  reader.readAsText(file);
+  });
 }
 
 function confirmClearAll() {
-  showModal("Clear all data?", "All transactions and categories will be permanently deleted.", () => {
-    localStorage.removeItem(STORAGE_KEY);
-    state = { transactions: [], categories: JSON.parse(JSON.stringify(DEFAULT_CATEGORIES)), currency: "USD" };
-    saveState();
+  showModal("Clear all data?", "All transactions and categories will be permanently deleted.", async () => {
+    // Use DB.clearAll() instead of localStorage.removeItem
+    await DB.clearAll();
+    state = { transactions: [], categories: JSON.parse(JSON.stringify(DEFAULT_CATEGORIES)), currency: "INR" };
+    await persistCategories();
     closeModal();
     updateCurrencyLabel();
     toast("All data cleared");
@@ -603,15 +621,80 @@ function closeModal() {
 }
 
 /* ---------------- Init ---------------- */
-function init() {
-  loadState();
+function setupEventListeners() {
+  // Navigation
+  document.getElementById("btn-settings")?.addEventListener("click", () => goTo("settings"));
+  document.getElementById("link-all-tx")?.addEventListener("click", () => goTo("transactions"));
+  document.getElementById("btn-filter")?.addEventListener("click", openFilterModal);
+  document.getElementById("btn-nav-add")?.addEventListener("click", openAdd);
+  document.getElementById("nav-home")?.addEventListener("click", () => goTo("home"));
+  document.getElementById("nav-transactions")?.addEventListener("click", () => goTo("transactions"));
+  document.getElementById("nav-stats")?.addEventListener("click", () => goTo("stats"));
+  document.getElementById("nav-categories")?.addEventListener("click", () => goTo("categories"));
+
+  // Transaction Filters
+  document.getElementById("txSearchInput")?.addEventListener("input", (e) => {
+    ui.txSearch = e.target.value;
+    renderAllTransactions();
+  });
+  document.getElementById("txCatFilter")?.addEventListener("change", (e) => {
+    ui.txCategoryFilter = e.target.value;
+    renderAllTransactions();
+  });
+
+  // Add / Edit Screen
+  document.getElementById("btn-close-add")?.addEventListener("click", closeAdd);
+  document.getElementById("btn-save-tx")?.addEventListener("click", saveTransaction);
+  document.getElementById("deleteTxLink")?.addEventListener("click", confirmDeleteTx);
+  document.getElementById("typeExpenseBtn")?.addEventListener("click", () => setTxType("expense"));
+  document.getElementById("typeIncomeBtn")?.addEventListener("click", () => setTxType("income"));
+
+  // Stats Screen
+  document.querySelectorAll(".period-tabs button").forEach(btn => {
+    btn.addEventListener("click", () => setStatPeriod(btn.dataset.p));
+  });
+
+  // Categories Screen
+  document.querySelectorAll(".add-cat-btn").forEach(btn => {
+    btn.addEventListener("click", () => promptAddCategory(btn.dataset.type));
+  });
+
+  // Settings Screen
+  document.getElementById("row-manage-cats")?.addEventListener("click", () => goTo("categories"));
+  document.getElementById("row-download-db")?.addEventListener("click", downloadDatabase);
+  document.getElementById("row-upload-db")?.addEventListener("click", uploadDatabase);
+  document.getElementById("uploadDbFile")?.addEventListener("change", restoreDatabase);
+  document.getElementById("row-currency")?.addEventListener("click", changeCurrency);
+  document.getElementById("row-clear-all")?.addEventListener("click", confirmClearAll);
+
+  // Modal
+  document.getElementById("btn-modal-cancel")?.addEventListener("click", closeModal);
+}
+
+async function init() {
+  setupEventListeners();
+  await loadState();
+
   updateCurrencyLabel();
   document.getElementById("dateInput").value = todayISO();
   renderAddCatGrid();
   renderHome();
 
+  if (navigator.storage && navigator.storage.persist) {
+    navigator.storage.persist().catch(() => {});
+  }
+
+  window.addEventListener("pagehide", flushOnExit);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushOnExit();
+  });
+
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("sw.js").catch((err) => { console.warn("SW registration failed:", err); });
   }
+}
+
+function flushOnExit() {
+  DB.flush().catch((err) => console.error("Failed to flush DB on exit:", err));
 }
 document.addEventListener("DOMContentLoaded", init);

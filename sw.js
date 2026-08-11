@@ -1,8 +1,9 @@
-const CACHE_NAME = "wallet-cache-v1";
+const CACHE_NAME = "wallet-cache-v2";
 const ASSETS = [
   "./",
   "./index.html",
   "./app.js",
+  "./db.js",
   "./manifest.json",
   "./icons/icon-192.png",
   "./icons/icon-512.png"
