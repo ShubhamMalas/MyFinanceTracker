@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Wallet — Finance Tracker</title>
 <meta name="theme-color" content="#0F1115">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' https://cdnjs.cloudflare.com; script-src 'self' https://cdnjs.cloudflare.com 'unsafe-eval' 'wasm-unsafe-eval'; object-src 'none'; style-src 'self' 'unsafe-inline';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' https://cdnjs.cloudflare.com; script-src 'self' https://cdnjs.cloudflare.com 'unsafe-eval' 'wasm-unsafe-eval'; object-src 'none'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://generativelanguage.googleapis.com;">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
@@ -218,6 +218,54 @@ body{
   box-shadow:0 8px 18px -4px rgba(91,103,214,.7);
   margin-top:-26px; border:4px solid var(--bg);
 }
+.nav-fab-mic{
+  width:40px;height:40px; font-size:18px;
+  background:linear-gradient(135deg,#33D69F,#22A87A);
+  box-shadow:0 8px 18px -4px rgba(34,168,122,.7);
+  margin-top:-14px; border:3px solid var(--bg);
+}
+.nav-fab-mic.listening{
+  animation:pulseMic 1.1s ease-in-out infinite;
+}
+@keyframes pulseMic{
+  0%{box-shadow:0 0 0 0 rgba(255,107,107,.6);}
+  70%{box-shadow:0 0 0 14px rgba(255,107,107,0);}
+  100%{box-shadow:0 0 0 0 rgba(255,107,107,0);}
+}
+.voice-sheet{
+  position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:60;
+  display:none; align-items:flex-end; justify-content:center;
+}
+.voice-sheet.show{display:flex;}
+.voice-card{
+  width:100%; max-width:480px; background:var(--surface);
+  border-radius:22px 22px 0 0; padding:22px 20px calc(20px + var(--safe-bottom));
+  border-top:1px solid var(--line);
+}
+.voice-card h3{margin:0 0 4px; font-size:16px;}
+.voice-status{color:var(--muted); font-size:13px; margin-bottom:14px;}
+.voice-transcript{
+  background:var(--surface-2); border:1px solid var(--line); border-radius:14px;
+  padding:12px 14px; font-size:14px; min-height:44px; margin-bottom:14px; color:var(--text);
+}
+.voice-preview{
+  background:var(--surface-2); border:1px solid var(--line); border-radius:14px;
+  padding:14px; margin-bottom:14px; display:none;
+}
+.voice-preview.show{display:block;}
+.voice-preview .row{display:flex; justify-content:space-between; padding:5px 0; font-size:14px;}
+.voice-preview .row span:first-child{color:var(--muted);}
+.voice-preview .amt.expense{color:var(--expense); font-weight:700;}
+.voice-preview .amt.income{color:var(--income); font-weight:700;}
+.voice-actions{display:flex; gap:10px;}
+.voice-actions button{
+  flex:1; padding:13px; border-radius:14px; border:none; font-size:15px; font-weight:700; cursor:pointer;
+}
+.voice-actions .mic-btn{background:var(--accent); color:#fff;}
+.voice-actions .mic-btn.stop{background:var(--expense);}
+.voice-actions .confirm-btn{background:var(--income); color:#0F1115; display:none;}
+.voice-actions .confirm-btn.show{display:block;}
+.voice-actions .cancel-btn{background:var(--surface-2); color:var(--text); flex:0 0 90px;}
 
 /* ---------- Add / Edit screen ---------- */
 .sheet-header{
@@ -502,6 +550,11 @@ input[type=file]{display:none;}
         <div class="txt"><div class="t1">Currency</div><div class="t2" id="currencyLabel">USD ($)</div></div>
         <div class="chev">›</div>
       </div>
+      <div class="settings-row" id="row-gemini-key">
+        <div class="ic">✨</div>
+        <div class="txt"><div class="t1">Gemini API Key</div><div class="t2" id="geminiKeyLabel">Not set — voice add disabled</div></div>
+        <div class="chev">›</div>
+      </div>
       <div class="settings-row" id="row-clear-all">
         <div class="ic">🗑️</div>
         <div class="txt"><div class="t1" style="color:var(--expense)">Clear All Data</div><div class="t2">Delete every transaction</div></div>
@@ -522,6 +575,7 @@ input[type=file]{display:none;}
       List
     </button>
     <div class="nav-fab" id="btn-nav-add">+</div>
+    <div class="nav-fab nav-fab-mic" id="btn-voice-add" title="Add by voice">🎤</div>
     <button class="nav-btn" id="nav-stats">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M12 20V4M20 20v-7"/></svg>
       Stats
@@ -545,11 +599,33 @@ input[type=file]{display:none;}
 </div>
 <div class="toast" id="toast"></div>
 
+<div class="voice-sheet" id="voiceSheet">
+  <div class="voice-card">
+    <h3>🎤 Speak a transaction</h3>
+    <div class="voice-status" id="voiceStatus">Tap the mic and say something like "Spent 250 on groceries" or "Received 5000 salary"</div>
+    <div class="voice-transcript" id="voiceTranscript">—</div>
+    <div class="voice-preview" id="voicePreview">
+      <div class="row"><span>Type</span><span class="amt" id="pv-type"></span></div>
+      <div class="row"><span>Amount</span><span class="amt" id="pv-amount"></span></div>
+      <div class="row"><span>Category</span><span id="pv-category"></span></div>
+      <div class="row"><span>Note</span><span id="pv-note"></span></div>
+      <div class="row"><span>Date</span><span id="pv-date"></span></div>
+    </div>
+    <div class="voice-actions">
+      <button class="cancel-btn" id="btn-voice-cancel">Cancel</button>
+      <button class="mic-btn" id="btn-voice-toggle">Start Listening</button>
+      <button class="confirm-btn" id="btn-voice-confirm">Add Transaction</button>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"
   integrity="sha384-DhxhYObIMeMNGyAG7iK11OHzBIKyEIeRL0ad1iFPAOwZB8iirUlTT0O/WJJUk8+o"
   crossorigin="anonymous"></script>
 <script src="db.js"></script>
 <script src="app.js"></script>
+<script src="crypto-vault.js"></script>
+<script src="voice.js"></script>
 </body>
 </html>
 
