@@ -551,6 +551,58 @@ function updateCurrencyLabel() {
   if (cur) cur.textContent = currencySymbol();
 }
 
+async function changeGeminiKey() {
+  const hasExisting = !!(await DB.getSetting("geminiKeyCipher"));
+  const action = hasExisting
+    ? prompt('Type "change" to replace your saved key, or "clear" to remove it:', "change")
+    : "change";
+  if (action === null) return;
+
+  if (action.trim().toLowerCase() === "clear") {
+    await DB.saveSetting("geminiKeyCipher", "");
+    await DB.saveSetting("geminiKeySalt", "");
+    await DB.saveSetting("geminiKeyIv", "");
+    CryptoVault.clearSession();
+    await updateGeminiKeyLabel();
+    toast("Gemini key removed");
+    return;
+  }
+
+  const key = prompt("Paste your Gemini API key (from aistudio.google.com):");
+  if (key === null || !key.trim()) return;
+
+  const passphrase = prompt(
+    "Choose a passphrase to encrypt it. You'll need this each session to use voice add:"
+  );
+  if (!passphrase) {
+    toast("A passphrase is required to store the key securely");
+    return;
+  }
+
+  const { saltB64 } = await CryptoVault.initVault(passphrase);
+  const { ivB64, cipherB64 } = await CryptoVault.encrypt(key.trim());
+
+  await DB.saveSetting("geminiKeyCipher", cipherB64);
+  await DB.saveSetting("geminiKeySalt", saltB64);
+  await DB.saveSetting("geminiKeyIv", ivB64);
+
+  await updateGeminiKeyLabel();
+  toast("Gemini key encrypted and saved");
+}
+
+async function updateGeminiKeyLabel() {
+  const label = document.getElementById("geminiKeyLabel");
+  if (!label) return;
+  const cipher = await DB.getSetting("geminiKeyCipher");
+  if (!cipher) {
+    label.textContent = "Not set — voice add disabled";
+    return;
+  }
+  label.textContent = CryptoVault.hasSessionKey()
+    ? "Encrypted & unlocked (tap to change)"
+    : "Encrypted — locked (tap to change or unlock via voice add)";
+}
+
 async function downloadDatabase() {
   try {
     const data = await DB.exportFile();
@@ -665,7 +717,9 @@ function setupEventListeners() {
   document.getElementById("row-upload-db")?.addEventListener("click", uploadDatabase);
   document.getElementById("uploadDbFile")?.addEventListener("change", restoreDatabase);
   document.getElementById("row-currency")?.addEventListener("click", changeCurrency);
+  document.getElementById("row-gemini-key")?.addEventListener("click", changeGeminiKey);
   document.getElementById("row-clear-all")?.addEventListener("click", confirmClearAll);
+  document.getElementById("btn-voice-add")?.addEventListener("click", () => window.VoiceEntry?.open());
 
   // Modal
   document.getElementById("btn-modal-cancel")?.addEventListener("click", closeModal);
@@ -676,6 +730,7 @@ async function init() {
   await loadState();
 
   updateCurrencyLabel();
+  updateGeminiKeyLabel();
   document.getElementById("dateInput").value = todayISO();
   renderAddCatGrid();
   renderHome();
