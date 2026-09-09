@@ -4,7 +4,7 @@
    and saves it via the existing DB layer.
    ========================================================= */
 
-const GEMINI_MODEL = "gemini-2.0-flash"; // small/cheap model, good for structured extraction
+const GEMINI_MODEL = "gemini-2.5-flash-lite"; // small/cheap, current-gen model for structured extraction
 const GEMINI_URL = (key) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(key)}`;
 
@@ -216,7 +216,12 @@ Spoken text: "${text}"`;
       if (!res.ok) {
         const errBody = await res.text().catch(() => "");
         console.error("Gemini error", res.status, errBody);
-        e.status.textContent = `Gemini request failed (${res.status}). Check your API key.`;
+        const hint = res.status === 404
+          ? "Model unavailable — it may have been retired. Update GEMINI_MODEL in voice.js."
+          : res.status === 401 || res.status === 403
+          ? "Check that your API key is valid."
+          : "Please try again.";
+        e.status.textContent = `Gemini request failed (${res.status}). ${hint}`;
         return;
       }
 
